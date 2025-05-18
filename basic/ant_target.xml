@@ -1,0 +1,33 @@
+<?xml version="1.0"?>
+<mujoco model="AntReachTarget">
+    <!-- ❶ global settings -->
+    <option timestep="0.002" gravity="0 0 -9.81" integrator="RK4"/>
+    <size nuserdata="0" nkey="0"/>
+
+    <!-- ❷ include the stock Ant morphology shipped with MuJoCo -->
+    <include file="/Users/qianjing/micromamba/envs/mujoco_env/lib/python3.10/site-packages/gymnasium/envs/mujoco/assets/ant.xml"/>
+
+    <!-- ❸ world & task objects -->
+    <worldbody>
+        <!-- infinite plane -->
+        <geom name="ground" type="plane" size="50 50 0.1" rgba="0.7 0.9 0.7 1"/>
+
+        <!-- red target sphere ― body needed so we can query its pos -->
+        <body name="target" pos="5 0 0.25">
+            <geom type="sphere" size="0.25" rgba="1 0 0 1"/>
+            <joint type="free"/>  <!-- free but massless so physics ignores -->
+        </body>
+    </worldbody>
+
+    <!-- ❹ actuators: identical to stock Ant -->
+    <actuator>
+        <motor joint="hip_1"  ctrlrange="-1 1" gear="150"/>
+        <motor joint="ankle_1" ctrlrange="-1 1" gear="150"/>
+        <motor joint="hip_2"  ctrlrange="-1 1" gear="150"/>
+        <motor joint="ankle_2" ctrlrange="-1 1" gear="150"/>
+        <motor joint="hip_3"  ctrlrange="-1 1" gear="150"/>
+        <motor joint="ankle_3" ctrlrange="-1 1" gear="150"/>
+        <motor joint="hip_4"  ctrlrange="-1 1" gear="150"/>
+        <motor joint="ankle_4" ctrlrange="-1 1" gear="150"/>
+    </actuator>
+</mujoco>
