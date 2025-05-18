@@ -136,7 +136,7 @@ def plan_action(obs, h, z):
             seq = seq.round().clamp(-1, 1)  # discrete {-1,0,1}
             rewards = torch.zeros(CEM_samples)
             for i in range(CEM_samples):
-                z_roll = z.clone().unsqueeze(0)
+                z_roll = z.clone()
                 h_roll = h.clone()
                 total = 0.0
                 for t in range(planning_horizon):
@@ -179,8 +179,7 @@ for ep in range(episodes):
         mu_post, logvar_post = encoder(next_obs)
         z_post = reparameterize(mu_post, logvar_post)
         # update hidden using posterior z (per RSSM paper)
-        _, _, h = rssm(z_post.detach().unsqueeze(0),
-                       torch.tensor([[action]]), h)
+        _, _, h = rssm(z_post.detach(), torch.tensor([[action]]), h)
 
         obs = next_obs
         z = z_post
