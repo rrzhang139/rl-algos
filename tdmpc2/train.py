@@ -1,13 +1,13 @@
 """Train TD-MPC2 on a ManiSkill environment."""
-try:
-    import gymnasium as gym
-except ImportError:
-    import gym
-import torch
+import gymnasium as gym
 from collections import deque
+import mani_skill
 
-from tdmpc2.tdmpc2 import TD_MPC2
-from tdmpc2.envs import make_env
+from tdmpc2 import TD_MPC2
+
+
+def make_env(env_name):
+    return gym.make(env_name)
 
 
 def run(env_name="PickCube-v1", episodes=50, steps_per_episode=200):
@@ -41,8 +41,10 @@ def run(env_name="PickCube-v1", episodes=50, steps_per_episode=200):
         returns.append(ep_return)
         avg_ret = sum(returns[-10:]) / len(returns[-10:])
         # Print recent performance for monitoring progress.
-        print(f"Episode {ep}: return={ep_return:.1f}, avg_return={avg_ret:.1f}")
+        print(
+            f"Episode {ep}: return={ep_return:.1f}, avg_return={avg_ret:.1f}")
     env.close()
+
 
 if __name__ == "__main__":
     run()

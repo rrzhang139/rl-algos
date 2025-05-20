@@ -6,6 +6,7 @@ from torch.optim import Adam
 from .common.models import Encoder, Dynamics, Actor, Critic
 from .common.buffer import ReplayBuffer
 
+
 class TD_MPC2:
     """Minimal TD-MPC2 implementation for continuous control."""
 
@@ -36,7 +37,8 @@ class TD_MPC2:
     @torch.no_grad()
     def act(self, obs, noise_scale=0.1):
         # Convert to tensor and add batch dimension.
-        obs = torch.tensor(obs, dtype=torch.float32, device=self.device).unsqueeze(0)
+        obs = torch.tensor(obs, dtype=torch.float32,
+                           device=self.device).unsqueeze(0)
         latent = self.encoder(obs)
         # Deterministic action from actor.
         action = self.actor(latent).squeeze(0)
@@ -67,17 +69,21 @@ class TD_MPC2:
             # Target policy value for next state.
             target_act = self.actor(next_latent)
             q1_next, q2_next = self.critic(next_latent, target_act)
-            target_q = rew + self.gamma * (1 - done) * torch.min(q1_next, q2_next).squeeze(-1)
+            target_q = rew + self.gamma * \
+                (1 - done) * torch.min(q1_next, q2_next).squeeze(-1)
 
         # --- Critic update ---
         q1, q2 = self.critic(latent, act)
-        critic_loss = F.mse_loss(q1.squeeze(-1), target_q) + F.mse_loss(q2.squeeze(-1), target_q)
+        critic_loss = F.mse_loss(q1.squeeze(-1), target_q) + \
+            F.mse_loss(q2.squeeze(-1), target_q)
         self.critic_opt.zero_grad()
         critic_loss.backward()
         self.critic_opt.step()
 
         # --- Actor update ---
-        actor_loss = -self.critic.q1(torch.cat([latent, self.actor(latent)], dim=-1)).mean()
+        actor_loss = - \
+            self.critic.q1(
+                torch.cat([latent, self.actor(latent)], dim=-1)).mean()
         self.actor_opt.zero_grad()
         actor_loss.backward()
         self.actor_opt.step()
