@@ -2,7 +2,10 @@
 import gymnasium as gym
 from collections import deque
 import mani_skill
+from mani_skill.vector.wrappers.gymnasium import ManiSkillVectorEnv
 import tyro
+import torch
+import numpy as np
 from dataclasses import dataclass
 
 from tdmpc2 import TD_MPC2
@@ -15,16 +18,23 @@ class TrainArgs:
     episodes: int = 50
     steps_per_episode: int = 200
     num_envs: int = 32
+    horizon: int = 5
+    gamma: float = 0.99
+    mpc: bool = False
 
 
 def run(args: TrainArgs):
     """Run a short training loop on the specified ManiSkill task."""
     env = gym.make(args.env_id, num_envs=args.num_envs)
+    env = ManiSkillVectorEnv(env, auto_reset=True, ignore_terminations=False)
     # breakpoint()
     agent = TD_MPC2(
         env.observation_space.shape[-1],
         env.action_space.shape[-1],
         env.action_space.high[0][0], # action upper bound
+        mpc=args.mpc,
+        horizon=args.horizon,
+        gamma=args.gamma,
     )
 
     returns = []
@@ -38,14 +48,22 @@ def run(args: TrainArgs):
             next_obs, rew, terminated, truncated, _ = env.step(act)
             done = terminated | truncated
             # 3. Store transition in the replay buffer.
-            agent.replay.store(obs, act, rew, next_obs, done)
+            # TODO: can optimize this a bit, but for readability this is much better to store on time-aligned axis.
+            for i in range(args.num_envs):
+                agent.replay.store(
+                    obs[i].cpu().numpy(),
+                    act[i].cpu().numpy(),
+                    rew[i].cpu().numpy().item(),
+                    next_obs[i].cpu().numpy(),
+                    done[i].cpu().numpy().item()
+                )
+            
             obs = next_obs
-            ep_return += rew.item()
+            ep_return += rew.sum().item()
             # Start updating once enough data has been collected.
             if agent.replay.size > 1000:
                 agent.update(args.num_envs)
-            if done:
-                break
+                
         returns.append(ep_return)
         avg_ret = sum(returns[-10:]) / len(returns[-10:])
         # Print recent performance for monitoring progress.

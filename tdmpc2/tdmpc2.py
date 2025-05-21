@@ -10,7 +10,7 @@ from .common.buffer import ReplayBuffer
 class TD_MPC2:
     """Minimal TD-MPC2 implementation for continuous control."""
 
-    def __init__(self, obs_dim, act_dim, act_limit, mpc=False, device="cpu"):
+    def __init__(self, obs_dim, act_dim, act_limit, mpc=False, horizon=5, gamma=0.99, device="cpu"):
         self.device = device
         self.mpc = mpc
 
@@ -30,8 +30,9 @@ class TD_MPC2:
         )
 
         # Experience replay buffer used for off-policy updates.
-        self.replay = ReplayBuffer(obs_dim, act_dim, size=100000)
-        self.gamma = 0.99
+        self.horizon = horizon
+        self.replay = ReplayBuffer(obs_dim, act_dim, size=100000, horizon=self.horizon)
+        self.gamma = gamma
         self.act_dim = act_dim
         self.act_limit = act_limit
         
@@ -42,16 +43,16 @@ class TD_MPC2:
     def act(self, obs, noise_scale=0.1):
         obs = torch.as_tensor(obs, dtype=torch.float32,
                            device=self.device)
-        breakpoint()
+        # breakpoint()
         latent = self.encoder(obs)
         if self.mpc:
-            self.plan(latent)
+            action = self.plan(latent)
         else:
             action = self.actor(latent).squeeze(0)
         # Add exploration noise when interacting with the env.
         action += noise_scale * torch.randn_like(action)
-        # Clamp to action bounds and return as numpy array.
-        return torch.clamp(action, -self.act_limit, self.act_limit).cpu().numpy()
+        # Clamp to action bounds
+        return torch.clamp(action, -self.act_limit, self.act_limit)
 
     def update(self, batch_size=256):
         batch = self.replay.sample_batch(batch_size)
