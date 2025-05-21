@@ -1,4 +1,4 @@
-# Minimal TD-MPC2 Example
+# Mini TD-MPC2
 
 This directory contains a toy implementation of the TD-MPC2 algorithm. It is
 simplified for educational purposes and trains on the `PickCube-v1` task from

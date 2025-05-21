@@ -10,8 +10,9 @@ from .common.buffer import ReplayBuffer
 class TD_MPC2:
     """Minimal TD-MPC2 implementation for continuous control."""
 
-    def __init__(self, obs_dim, act_dim, act_limit, device="cpu"):
+    def __init__(self, obs_dim, act_dim, act_limit, mpc=False, device="cpu"):
         self.device = device
+        self.mpc = mpc
 
         # --- Model definitions ---
         latent_dim = 32  # size of encoded observation
@@ -33,15 +34,20 @@ class TD_MPC2:
         self.gamma = 0.99
         self.act_dim = act_dim
         self.act_limit = act_limit
+        
+    def plan(self, latent):
+        pass
 
     @torch.no_grad()
     def act(self, obs, noise_scale=0.1):
-        # Convert to tensor and add batch dimension.
-        obs = torch.tensor(obs, dtype=torch.float32,
-                           device=self.device).unsqueeze(0)
+        obs = torch.as_tensor(obs, dtype=torch.float32,
+                           device=self.device)
+        breakpoint()
         latent = self.encoder(obs)
-        # Deterministic action from actor.
-        action = self.actor(latent).squeeze(0)
+        if self.mpc:
+            self.plan(latent)
+        else:
+            action = self.actor(latent).squeeze(0)
         # Add exploration noise when interacting with the env.
         action += noise_scale * torch.randn_like(action)
         # Clamp to action bounds and return as numpy array.
@@ -62,7 +68,7 @@ class TD_MPC2:
         # Predict next latent state and regress to encoding of next_obs
         dyn_loss = F.mse_loss(pred_next, next_latent)
         self.dynamics_opt.zero_grad()
-        dyn_loss.backward()
+        dyn_loss.backward(retain_graph=True)
         self.dynamics_opt.step()
 
         with torch.no_grad():
