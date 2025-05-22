@@ -3,7 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.optim import Adam
 
-from .common.models import Encoder, Dynamics, Actor, Critic
+from .common.models import Encoder, Dynamics, Actor, Critic, RewardModel
 from .common.buffer import ReplayBuffer
 
 
@@ -20,12 +20,12 @@ class TD_MPC2:
         self.dynamics = Dynamics(latent_dim, act_dim).to(device)
         self.actor = Actor(latent_dim, act_dim, act_limit).to(device)
         self.critic = Critic(latent_dim, act_dim).to(device)
+        self.reward = RewardModel(latent_dim, act_dim).to(device)
 
         # Optimisers for policy, critic and dynamics/encoder.
-        self.actor_opt = Adam(self.actor.parameters(), lr=3e-4)
-        self.critic_opt = Adam(self.critic.parameters(), lr=3e-4)
-        self.dynamics_opt = Adam(
-            list(self.encoder.parameters()) + list(self.dynamics.parameters()),
+        self.optimizer = Adam(
+            list(self.encoder.parameters()) + list(self.dynamics.parameters()) + \
+                list(self.critic.parameters()) + list(self.actor.parameters()),
             lr=3e-4,
         )
 
@@ -56,43 +56,53 @@ class TD_MPC2:
 
     def update(self, batch_size=256):
         batch = self.replay.sample_batch(batch_size)
-        obs = batch["obs"].to(self.device)
-        next_obs = batch["next_obs"].to(self.device)
-        act = batch["act"].to(self.device)
-        rew = batch["rew"].to(self.device)
-        done = batch["done"].to(self.device)
-
-        # --- Dynamics loss ---
-        latent = self.encoder(obs)
-        next_latent = self.encoder(next_obs).detach()
-        pred_next = self.dynamics(latent, act)
-        # Predict next latent state and regress to encoding of next_obs
-        dyn_loss = F.mse_loss(pred_next, next_latent)
-        self.dynamics_opt.zero_grad()
-        dyn_loss.backward(retain_graph=True)
-        self.dynamics_opt.step()
-
+        obs      = batch["obs"].permute(1, 0, 2).to(self.device)   # (K+1, B, obs_dim)
+        act      = batch["act"].permute(1, 0, 2).to(self.device)   # (K,   B, act_dim)
+        rew      = batch["rew"].permute(1, 0).to(self.device)      # (K,   B)
+        done     = batch["done"].permute(1, 0).to(self.device)     # (K,   B)
+        
         with torch.no_grad():
-            # Target policy value for next state.
-            target_act = self.actor(next_latent)
-            q1_next, q2_next = self.critic(next_latent, target_act)
-            target_q = rew + self.gamma * \
-                (1 - done) * torch.min(q1_next, q2_next).squeeze(-1)
+            next_latent = self.encoder(obs[1:])
+            _, pi_act, _, _ = self.actor(next_latent)
+            td_targets = rew + self.gamma * min(self.critic(next_latent, pi_act))
+            
+        # --- Dynamics loss ---
+        latents = torch.empty_like(obs, device=self.device)
+        latent = self.encoder(obs[0])
+        dyn_loss = 0
+        for t in range(self.horizon):
+            latent = self.dynamics(latent, act[t])
+            dyn_loss += F.mse_loss(latent, next_latent[t]) * self.gamma**t
+            latents[t+1] = latent
+            
+            
+        _latents = latents[:-1]
+        q1, q2 = self.critic(_latents, act)
+        reward_preds = self.reward(_latents, act)
+        
+        # Compute losses
+        reward_loss, value_loss = 0, 0
+        for t in range(self.horizon):
+            reward_loss += F.mse_loss(reward_preds[t], rew[t]).mean() * self.gamma**t
+            value_loss += F.mse_loss(q1[t], td_targets[t]).mean() * self.gamma**t
+            value_loss += F.mse_loss(q2[t], td_targets[t]).mean() * self.gamma**t
+        
+        dyn_loss *= (1 / self.horizon)
+        reward_loss*=(1 / self.horizon)
+        value_loss*=(1 / self.horizon * 2) # 2 critic networks
+        
+        total_loss = (
+            # TODO: add coeff for each loss
+            dyn_loss + 
+            reward_loss + 
+            value_loss
+        )
+            
+        self.optimizer.zero_grad()
+        total_loss.backward()
+        self.optimizer.step()
+        
+        pi_loss = self.actor()
 
-        # --- Critic update ---
-        q1, q2 = self.critic(latent, act)
-        critic_loss = F.mse_loss(q1.squeeze(-1), target_q) + \
-            F.mse_loss(q2.squeeze(-1), target_q)
-        self.critic_opt.zero_grad()
-        critic_loss.backward()
-        self.critic_opt.step()
-
-        # --- Actor update ---
-        actor_loss = - \
-            self.critic.q1(
-                torch.cat([latent, self.actor(latent)], dim=-1)).mean()
-        self.actor_opt.zero_grad()
-        actor_loss.backward()
-        self.actor_opt.step()
-
-        return dict(actor_loss=actor_loss.item(), critic_loss=critic_loss.item(), dyn_loss=dyn_loss.item())
+        return dict(dynamics_loss=dyn_loss.item(), reward_loss=reward_loss.item(), value_loss=value_loss.item(),
+                    total_loss=total_loss.item(), )

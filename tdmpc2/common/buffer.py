@@ -85,15 +85,15 @@ class ReplayBuffer:
         done = np.stack([
             self.done_buf[i : i + self.horizon] for i in idxs
         ])
-        next_obs = np.stack([
-            self.obs_buf[i + 1 : i + self.horizon + 2] for i in idxs
-        ])
+        # next_obs = np.stack([
+        #     self.obs_buf[i + 1 : i + self.horizon + 2] for i in idxs
+        # ])
 
         batch = dict(
             obs=torch.tensor(obs, dtype=torch.float32),
             act=torch.tensor(act, dtype=torch.float32),
             rew=torch.tensor(rew, dtype=torch.float32),
             done=torch.tensor(done, dtype=torch.float32),
-            next_obs=torch.tensor(next_obs, dtype=torch.float32),
+            # next_obs=torch.tensor(next_obs, dtype=torch.float32),
         )
         return batch
