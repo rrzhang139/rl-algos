@@ -37,11 +37,6 @@ class Dynamics(nn.Module):
 
 
 class Actor(nn.Module):
-    """
-    Stochastic squashed-Gaussian policy used by TD-MPC2.
-    * Minimal: no task-conditioning, no action-masking.*
-    """
-
     def __init__(
         self,
         latent_dim: int,
@@ -87,10 +82,8 @@ class Actor(nn.Module):
         eps = torch.randn_like(mu)
         pi  = mu + eps * log_std.exp()
 
-        # Log-prob under the unsquashed Gaussian
         log_pi = (-0.5 * ((eps ** 2) + 2 * log_std + math.log(2 * math.pi))).sum(dim=-1, keepdim=True)
 
-        # Squash to (-act_limit, act_limit)
         mu, pi, log_pi = self.squash(mu, pi, log_pi)
         mu = mu * self.act_limit
         pi = pi * self.act_limit
