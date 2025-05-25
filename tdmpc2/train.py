@@ -16,6 +16,7 @@ class TrainArgs:
     """Command line arguments for training TD-MPC2."""
     env_id: str = "PickCube-v1"
     episodes: int = 50
+    latent_dim: int = 32
     steps_per_episode: int = 200
     num_envs: int = 32
     horizon: int = 5
@@ -27,10 +28,10 @@ def run(args: TrainArgs):
     """Run a short training loop on the specified ManiSkill task."""
     env = gym.make(args.env_id, num_envs=args.num_envs)
     env = ManiSkillVectorEnv(env, auto_reset=True, ignore_terminations=False)
-    # breakpoint()
     agent = TD_MPC2(
         env.observation_space.shape[-1],
         env.action_space.shape[-1],
+        args.latent_dim,
         env.action_space.high[0][0], # action upper bound
         mpc=args.mpc,
         horizon=args.horizon,
@@ -41,14 +42,11 @@ def run(args: TrainArgs):
     for ep in range(args.episodes):
         obs, _ = env.reset()
         ep_return = 0
+        update_stats = None
         for t in range(args.steps_per_episode):
-            # 1. Query policy for action.
             act = agent.act(obs)
-            # 2. Step the environment.
             next_obs, rew, terminated, truncated, _ = env.step(act)
             done = terminated | truncated
-            # 3. Store transition in the replay buffer.
-            # TODO: can optimize this a bit, but for readability this is much better to store on time-aligned axis.
             for i in range(args.num_envs):
                 agent.replay.store(
                     obs[i].cpu().numpy(),
@@ -57,18 +55,15 @@ def run(args: TrainArgs):
                     next_obs[i].cpu().numpy(),
                     done[i].cpu().numpy().item()
                 )
-            
             obs = next_obs
             ep_return += rew.sum().item()
-            # Start updating once enough data has been collected.
             if agent.replay.size > 1000:
-                agent.update(args.num_envs)
-                
+                update_stats = agent.update(args.num_envs)
         returns.append(ep_return)
         avg_ret = sum(returns[-10:]) / len(returns[-10:])
-        # Print recent performance for monitoring progress.
-        print(
-            f"Episode {ep}: return={ep_return:.1f}, avg_return={avg_ret:.1f}")
+        print(f"Episode {ep}: return={ep_return:.1f}, avg_return={avg_ret:.1f}")
+        if update_stats is not None:
+            print("  Update stats:", ", ".join(f"{k}={v:.4f}" for k, v in update_stats.items()))
     env.close()
 
 

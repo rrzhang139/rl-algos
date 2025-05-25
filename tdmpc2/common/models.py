@@ -55,28 +55,31 @@ class Actor(nn.Module):
             nn.ReLU(),
             nn.Linear(128, 128),
             nn.ReLU(),
-            nn.Linear(128, act_dim),
+            nn.Linear(128, 2*act_dim),
         )
+        
+        nn.init.zeros_(self.mu_net[-1].weight)
+        nn.init.zeros_(self.mu_net[-1].bias)
 
-        self.log_std = nn.Parameter(torch.zeros(act_dim))
+        # self.log_std = nn.Parameter(torch.zeros(act_dim))
 
-    @torch.jit.script
-    def _squash(self, pi):
-        return torch.log(F.relu(1 - pi.pow(2)) + 1e-6)
+    # @torch.jit.script
+    # def _squash(self, pi):
+    #     return torch.log(F.relu(1 - pi.pow(2)) + 1e-6)
 
     def squash(self, mu, pi, log_pi):
-        """Apply squashing function."""
         mu = torch.tanh(mu)
         pi = torch.tanh(pi)
-        log_pi -= self._squash(pi).sum(-1, keepdim=True)
+        log_pi -= torch.log(F.relu(1 - pi.pow(2)) + 1e-6).sum(-1, keepdim=True)
+        # print(f"Det Jacob: {torch.log(F.relu(1 - pi.pow(2)) + 1e-6).sum(-1, keepdim=True)}")
         return mu, pi, log_pi
 
     def forward(self, latent):
-        mu = self.mu_net(latent)
+        mu, log_std = self.mu_net(latent).chunk(2, dim=-1)
 
         # Clamp log-σ
-        log_std = torch.clamp(self.log_std, self.log_std_min, self.log_std_max)
-        log_std = log_std.expand_as(mu)
+        log_std = torch.clamp(log_std, self.log_std_min, self.log_std_max)
+        print(f"Actor log std: {log_std[0][0]}")
 
         # Reparameterised sampling
         eps = torch.randn_like(mu)

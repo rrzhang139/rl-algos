@@ -11,12 +11,12 @@ from .common.buffer import ReplayBuffer
 class TD_MPC2:
     """Minimal TD-MPC2 implementation for continuous control."""
 
-    def __init__(self, obs_dim, act_dim, act_limit, mpc=False, horizon=5, gamma=0.99, entropy_coef=0.2, device="cpu"):
+    def __init__(self, obs_dim, act_dim, latent_dim, act_limit, mpc=False, horizon=5, gamma=0.99, entropy_coef=0.2, device="cpu"):
         self.device = device
         self.mpc = mpc
 
         # --- Model definitions ---
-        latent_dim = 32  # size of encoded observation
+        self.latent_dim = latent_dim
         self.encoder = Encoder(obs_dim, latent_dim).to(device)
         self.dynamics = Dynamics(latent_dim, act_dim).to(device)
         self.actor = Actor(latent_dim, act_dim, act_limit).to(device)
@@ -25,9 +25,10 @@ class TD_MPC2:
         self.reward = RewardModel(latent_dim, act_dim).to(device)
 
         # Optimisers for policy, critic and dynamics/encoder.
+        self.model_parameters = list(self.encoder.parameters()) + list(self.dynamics.parameters()) + \
+                list(self.critic.parameters()) + list(self.reward.parameters())
         self.optimizer = Adam(
-            list(self.encoder.parameters()) + list(self.dynamics.parameters()) + \
-                list(self.critic.parameters()) + list(self.reward.parameters()),
+            self.model_parameters,
             lr=3e-4,
         )
         self.act_optimizer = Adam(self.actor.parameters(), lr=3e-4)
@@ -41,7 +42,8 @@ class TD_MPC2:
         self.tau = 0.01
         self.act_dim = act_dim
         self.act_limit = act_limit
-        
+    
+    
     def plan(self, latent):
         pass
 
@@ -54,7 +56,7 @@ class TD_MPC2:
         if self.mpc:
             action = self.plan(latent)
         else:
-            action = self.actor(latent).squeeze(0)
+            _, action, _, _ = self.actor(latent)
         # Add exploration noise when interacting with the env.
         action += noise_scale * torch.randn_like(action)
         # Clamp to action bounds
@@ -62,9 +64,7 @@ class TD_MPC2:
 
 
     def update_pi(self, latents):
-        breakpoint()
-        K, B, _ = latents.shape
-        rho_vec = torch.pow(self.gamma, torch.arange(K, device=self.device))
+        rho_vec = torch.pow(self.gamma, torch.arange(self.horizon, device=self.device))
 
         _, pi_act, log_pi, _ = self.actor(latents)
 
@@ -81,7 +81,7 @@ class TD_MPC2:
         torch.nn.utils.clip_grad_norm_(self.actor.parameters(), self.grad_clip_norm)
         self.act_optimizer.step()
 
-        return pi_loss.item()
+        return pi_loss
     
     @torch.no_grad()
     def soft_update_target_critic(self):
@@ -103,8 +103,7 @@ class TD_MPC2:
             q_next = torch.min(q1_t, q2_t).squeeze(-1)
             td_targets = rew + self.gamma * (1 - done) * q_next
 
-            
-        latents = torch.empty_like(obs, device=self.device)
+        latents = torch.empty(self.horizon + 1, batch_size, self.latent_dim, device=self.device)
         latent = self.encoder(obs[0])
         dyn_loss = 0
         for t in range(self.horizon):
@@ -112,10 +111,10 @@ class TD_MPC2:
             dyn_loss += F.mse_loss(latent, next_latent[t]) * self.gamma**t
             latents[t+1] = latent
             
-            
         _latents = latents[:-1]
         q1, q2 = self.critic(_latents, act)
-        reward_preds = self.reward(_latents, act)
+        q1, q2 = q1.squeeze(-1), q2.squeeze(-1)
+        reward_preds = self.reward(_latents, act).squeeze(-1)
         
         # Compute losses
         reward_loss, value_loss = 0, 0
@@ -137,6 +136,7 @@ class TD_MPC2:
             
         self.optimizer.zero_grad()
         total_loss.backward()
+        grad_norm = torch.nn.utils.clip_grad_norm_(self.model_parameters, self.grad_clip_norm)
         self.optimizer.step()
         
         latents_detached = _latents.detach()
@@ -145,4 +145,4 @@ class TD_MPC2:
         self.soft_update_target_critic()
 
         return dict(dynamics_loss=dyn_loss.item(), reward_loss=reward_loss.item(), value_loss=value_loss.item(),
-                    total_loss=total_loss.item(), pi_loss=pi_loss.item())
+                    total_loss=total_loss.item(), pi_loss=pi_loss.item(), grad_norm=grad_norm)
