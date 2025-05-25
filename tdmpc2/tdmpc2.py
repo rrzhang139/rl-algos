@@ -3,6 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.optim import Adam
 from copy import deepcopy
+import numpy as np
 
 from .common.models import Encoder, Dynamics, Actor, Critic, RewardModel
 from .common.buffer import ReplayBuffer
@@ -11,7 +12,7 @@ from .common.buffer import ReplayBuffer
 class TD_MPC2:
     """Minimal TD-MPC2 implementation for continuous control."""
 
-    def __init__(self, obs_dim, act_dim, latent_dim, act_limit, mpc=False, horizon=5, gamma=0.99, entropy_coef=0.2, device="cpu"):
+    def __init__(self, obs_dim, act_dim, latent_dim, act_limit, mpc=True, horizon=5, gamma=0.99, entropy_coef=0.2, device="cpu"):
         self.device = device
         self.mpc = mpc
 
@@ -43,16 +44,109 @@ class TD_MPC2:
         self.act_dim = act_dim
         self.act_limit = act_limit
     
-    
-    def plan(self, latent):
-        pass
+        
+    @torch.no_grad()
+    def plan(self, z, eval_mode=False):
+        """
+        MPPI action-sequence optimiser   (single-task, no masking).
+
+        Parameters
+        ----------
+        z :  (B, latent_dim)  – current latent state(s)
+        eval_mode : bool      – set True during evaluation (no added noise)
+
+        Returns
+        -------
+        a0 : (B, act_dim) – first action in the optimised sequence, scaled
+                            to [-act_limit, act_limit] already.
+        """
+
+        # -------------  short names from cfg  ---------------------------------
+        H          = self.horizon
+        N          = 256                    # samples per env
+        N_elite    = 16
+        T          = 5                      # optimisation iterations
+        max_std    = 0.5
+        min_std    = 0.05
+        temperature= 1.0
+        num_pi = 24
+
+        B          = z.shape[0]             # number of parallel envs
+        device     = z.device
+        
+        if num_pi > 0:
+            breakpoint()
+            actions_pi = torch.empty(B, H, num_pi, self.act_dim, device=device)
+            z_pi = z.unsqueeze(1).repeat(1, num_pi, 1)            # (B,num_pi,D)
+            for t in range(H - 1):
+                _, a_t, _, _ = self.actor(z_pi)                   # (B,num_pi,A)
+                actions_pi[:, t] = a_t
+                z_pi = self.dynamics(z_pi, a_t)                   # next latent
+            actions_pi[:, -1] = self.actor(z_pi)[1]               # last step
+
+        # -------------  hold mean / std over the horizon  ---------------------
+        mean = torch.zeros(B, H, self.act_dim, device=device)
+        std  = torch.ones_like(mean) * max_std
+
+        z_repeat = z.unsqueeze(1).repeat(1, N, 1)          # (B,N,D)
+
+        # -------------  main optimisation loop  -------------------------------
+        for _ in range(T):
+
+            # Sample action sequences  (B, H, N, A)
+            eps = torch.randn(B, H, N, self.act_dim, device=device)
+            actions = (mean.unsqueeze(2) + std.unsqueeze(2) * eps).clamp(-1, 1)
+
+            # ----- rollout value ------------------------------------------------
+            value = torch.zeros(B, N, 1, device=device)
+            z_roll = z_repeat                                                # (B,N,D)
+            for t in range(H):
+                a_t = actions[:, t]                                          # (B,N,A)
+                z_roll = self.dynamics(z_roll, a_t)                          # next z
+                q1, q2 = self.target_critic(z_roll, a_t)
+                value += torch.min(q1, q2)                                   # accumulate
+
+            # ----- select elites -----------------------------------------------
+            elite_idx = torch.topk(value.squeeze(-1), N_elite, dim=1).indices     # (B,E)
+            elite_actions = torch.gather(actions, 2,
+                                        elite_idx.unsqueeze(1)
+                                                .unsqueeze(3)
+                                                .expand(-1, H, -1, self.act_dim))   # (B,H,E,A)
+            elite_val = torch.gather(value, 1, elite_idx.unsqueeze(-1))            # (B,E,1)
+
+            # ----- update mean / std  ------------------------------------------
+            max_val = elite_val.max(1, keepdim=True).values                        # (B,1,1)
+            score   = torch.exp(temperature * (elite_val - max_val))               # (B,E,1)
+            weight  = score / (score.sum(1, keepdim=True) + 1e-9)
+
+            mean = (weight.unsqueeze(1) * elite_actions).sum(2)
+            std  = torch.sqrt(
+                    (weight.unsqueeze(1) *
+                    (elite_actions - mean.unsqueeze(2)).pow(2)
+                    ).sum(2)
+                ).clamp_(min_std, max_std)
+
+        # -------------  pick one elite trajectory per env  ---------------------
+        weight = weight.squeeze(-1).cpu().numpy()                       # (B,E)
+        a_seq  = torch.zeros(B, H, self.act_dim, device=device)
+        for i in range(B):
+            j = np.random.choice(N_elite, p=weight[i] / weight[i].sum())
+            a_seq[i] = elite_actions[i, :, j]
+
+        a0 = a_seq[:, 0]                                                # first action
+
+        if not eval_mode:                                               # exploration
+            a0 += std[:, 0] * torch.randn_like(a0)
+
+        return (a0 * self.act_limit).clamp(-self.act_limit, self.act_limit)
 
     @torch.no_grad()
     def act(self, obs, noise_scale=0.1):
         obs = torch.as_tensor(obs, dtype=torch.float32,
                            device=self.device)
-        # breakpoint()
+        breakpoint()
         latent = self.encoder(obs)
+        
         if self.mpc:
             action = self.plan(latent)
         else:
@@ -90,6 +184,7 @@ class TD_MPC2:
             p_tgt.data.mul_(1.0 - self.tau).add_(self.tau * p.data)
 
     def update(self, batch_size=256):
+        breakpoint()
         batch = self.replay.sample_batch(batch_size)
         obs      = batch["obs"].permute(1, 0, 2).to(self.device)   # (K+1, B, obs_dim)
         act      = batch["act"].permute(1, 0, 2).to(self.device)   # (K,   B, act_dim)
@@ -98,6 +193,7 @@ class TD_MPC2:
         
         with torch.no_grad():
             next_latent = self.encoder(obs[1:])
+            print(f"Next latent: {next_latent[0][0]}")
             _, pi_act, _, _ = self.actor(next_latent)
             q1_t, q2_t = self.target_critic(next_latent, pi_act)
             q_next = torch.min(q1_t, q2_t).squeeze(-1)
@@ -110,7 +206,7 @@ class TD_MPC2:
             latent = self.dynamics(latent, act[t])
             dyn_loss += F.mse_loss(latent, next_latent[t]) * self.gamma**t
             latents[t+1] = latent
-            
+        breakpoint()
         _latents = latents[:-1]
         q1, q2 = self.critic(_latents, act)
         q1, q2 = q1.squeeze(-1), q2.squeeze(-1)
@@ -143,6 +239,8 @@ class TD_MPC2:
         pi_loss = self.update_pi(latents_detached)
         
         self.soft_update_target_critic()
+        
+        print("finished update")
 
         return dict(dynamics_loss=dyn_loss.item(), reward_loss=reward_loss.item(), value_loss=value_loss.item(),
                     total_loss=total_loss.item(), pi_loss=pi_loss.item(), grad_norm=grad_norm)
