@@ -13,6 +13,7 @@ A collection of reinforcement learning algorithm implementations including:
 - `dqn/`: Deep Q-Network implementations
 - `model-based/`: Model-based RL algorithms
 - `teacher-student-maniskill/`: Teacher-Student learning implementation for ManiskiLL
+- `skill_chaining/`: Simple policy sequencing example on ManiSkill
 
 ## Requirements
 
