@@ -4,7 +4,7 @@ A collection of reinforcement learning algorithm implementations including:
 
 - Basic RL implementations (PPO with MuJoCo environments)
 - DQN implementations
-- Model-based RL algorithms
+- Model-based RL algorithms (including a simple pixel-based PlaNet demo)
 - Teacher-Student learning for ManiskiLL
 
 ## Structure
